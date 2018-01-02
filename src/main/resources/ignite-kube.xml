@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<beans xmlns="http://www.springframework.org/schema/beans"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xmlns:util="http://www.springframework.org/schema/util"
+       xmlns:context="http://www.springframework.org/schema/context"
+       xmlns:p="http://www.springframework.org/schema/p"
+       xsi:schemaLocation="
+           http://www.springframework.org/schema/beans
+           http://www.springframework.org/schema/beans/spring-beans.xsd
+           http://www.springframework.org/schema/util
+           http://www.springframework.org/schema/util/spring-util.xsd
+           http://www.springframework.org/schema/context
+           http://www.springframework.org/schema/context/spring-context.xsd">
+
+    <context:component-scan base-package="com.scottieknows.ignite;com.scottieknows.diagnostics" /> 
+    <context:mbean-server/>
+    <context:mbean-export/>
+
+    <bean id="propertyConfigurer" class="org.springframework.beans.factory.config.PropertyPlaceholderConfigurer">
+        <property name="ignoreUnresolvablePlaceholders" value="true" />
+    </bean>
+
+    <bean class="java.lang.String" id="diagnosticsBaseDir">
+        <constructor-arg value="/opt/ignite/stats"/>
+    </bean>
+
+    <bean class="org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler" id="diagnosticsExecutor" p:poolSize="2">
+        <property name="threadFactory">
+            <bean class="org.springframework.scheduling.concurrent.CustomizableThreadFactory" p:daemon="true">
+                <constructor-arg value="diagnostic-exec-"/>
+            </bean>
+        </property>
+    </bean>
+
+    <bean id="ignite.cfg" class="org.apache.ignite.configuration.IgniteConfiguration">
+        <property name="peerClassLoadingEnabled" value="true"/>
+        <property name="gridLogger">
+            <bean class="org.apache.ignite.logger.log4j2.Log4J2Logger">
+                <constructor-arg type="java.lang.String" value="log4j2.xml"/>
+            </bean>
+        </property>
+
+        <!-- Explicitly configure TCP discovery SPI to provide list of initial nodes. -->
+        <property name="discoverySpi">
+            <bean class="org.apache.ignite.spi.discovery.tcp.TcpDiscoverySpi">
+                <property name="ipFinder">
+                    <bean class="com.scottieknows.ignite.IgnitePodResolver" init-method='init'/>
+                </property>
+            </bean>
+        </property>
+    </bean>
+</beans>

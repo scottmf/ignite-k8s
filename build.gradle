@@ -1,0 +1,180 @@
+buildscript {
+    ext {
+        transmodeGradleVersion = '1.2'
+    }
+    repositories {
+        jcenter()
+        mavenCentral()
+    }
+    dependencies {
+        // Later versions (e.g. 4.5.1) don't work. See https://www.jfrog.com/jira/projects/GAP/issues/GAP-279.
+        classpath "org.jfrog.buildinfo:build-info-extractor-gradle:4.4.18"
+        classpath("se.transmode.gradle:gradle-docker:${transmodeGradleVersion}")
+    }
+}
+
+apply plugin: 'java'
+apply plugin: 'eclipse'
+apply plugin: 'idea'
+apply plugin: 'jacoco'
+apply plugin: 'findbugs'
+apply plugin: 'docker'
+apply plugin: 'maven-publish'
+apply plugin: 'com.jfrog.artifactory'
+
+import org.apache.tools.ant.filters.ReplaceTokens
+
+group = 'com.scottieknows.ignite'
+def projectVersion = '1.0.0-SNAPSHOT'
+
+def projectName = 'ignite-k8s'
+
+compileJava.options.encoding = 'UTF-8'
+
+jar {
+    baseName = "${projectName}"
+    version = "${projectVersion}"
+}
+
+sourceCompatibility = 1.8
+targetCompatibility = 1.8
+
+repositories {
+    mavenCentral()
+    maven { url 'http://artifactory.scottieknows.com/artifactory/' }
+    mavenLocal()
+}
+
+configurations {
+    providedRuntime
+}
+
+dependencies {
+    compile 'io.dropwizard.metrics:metrics-core:3.2.3'
+    compile 'org.apache.ignite:ignite-core:2.3.0'
+    compile 'org.apache.ignite:ignite-spring:2.3.0'
+    compile 'org.apache.ignite:ignite-kubernetes:2.3.0'
+    compile 'org.apache.ignite:ignite-log4j2:2.3.0'
+    compile 'org.apache.ignite:ignite-slf4j:2.3.0'
+    compile 'org.apache.logging.log4j:log4j-slf4j-impl:2.10.0'
+    compile 'io.fabric8:kubernetes-client:3.1.5'
+    compile 'org.apache.commons:commons-lang3:3.7'
+    compile 'com.scottieknows.diagnostics:scottieknows-diagnostics:3.0.1-SNAPSHOT'
+}
+
+eclipse {
+    classpath {
+        downloadSources = true
+        downloadJavadoc = true
+    }
+}
+
+task wrapper(type: Wrapper) {
+    gradleVersion = '4.4'
+}
+
+task sourcesJar(type: Jar, dependsOn: classes) {
+    classifier = 'sources'
+    from sourceSets.main.allSource
+}
+
+tasks.withType(FindBugs) {
+    reports {
+        xml.enabled true
+        html.enabled false
+    }
+}
+
+findbugs {
+    ignoreFailures = true
+}
+
+processResources {
+    def buildNumber = System.getenv("BUILD_NUMBER")
+    buildNumber = buildNumber != null ? buildNumber : "pre-jenkins"
+    filter(ReplaceTokens, tokens: [BUILD_NUMBER: buildNumber])
+}
+
+allprojects {
+    tasks.withType(Exec) {
+        doFirst {
+            println "+ ${commandLine.join(' ')}"
+        }
+    }
+}
+
+def dockerReg = project.findProperty("docker_registry") ?: ""
+task dockerBuild(type: Docker) {
+    push = false
+    dockerfile = file('docker/Dockerfile')
+    applicationName = jar.baseName
+    tagVersion = getBuildNumber()
+    project.group = "${dockerReg}"
+    doFirst {
+        copy {
+            from fileTree(dir: 'docker', includes: ['run-ignite.sh'])
+            into stageDir
+        }
+        copy {
+            from fileTree(dir: 'src/main/resources', includes: ['ignite-kube.xml', 'log4j2.xml'])
+            into stageDir
+        }
+        copy {
+            from jar
+            into stageDir
+        }
+        copy {
+            from configurations.compile.filter{f -> f.name}
+            into new File(stageDir, "/libs/")
+        }
+    }
+}
+
+task dockerPush(type: Docker, dependsOn: dockerBuild) {
+    push = true
+    dockerfile = file('docker/Dockerfile')
+    applicationName = jar.baseName
+    tagVersion = getBuildNumber()
+    project.group = "${dockerReg}"
+}
+
+def getBuildNumber() {
+    try {
+        def buildNumber = findProperty("buildTag")
+        if (buildNumber == null || buildNumber.trim().isEmpty()) {
+            buildNumber = "latest"
+        }
+        return buildNumber
+    } catch (Exception e) {
+        return "latest"
+    }
+}
+
+/*
+configurations.all {
+    // Check for updates every build
+    resolutionStrategy.cacheChangingModulesFor 0, 'seconds'
+}
+*/
+
+def publishRepoKey = projectVersion.endsWith('SNAPSHOT') ? 'libs-snapshot-local' : 'libs-release-local'
+
+artifactory {
+    version = project.version
+    contextUrl = project.findProperty("artifactory_contextUrl") ?: ""
+    resolve {
+        repository {
+            repoKey = "${publishRepoKey}"
+        }
+    }
+    publish {
+        repository {
+            repoKey = "${publishRepoKey}"
+            username = project.findProperty("artifactory_user") ?: ""
+            password = project.findProperty("artifactory_password") ?: ""
+        }
+        defaults {
+            publications 'main' // This matches main(MavenPublication) in publishing.publications
+        }
+    }
+}
