@@ -1,0 +1,87 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ignite
+  labels:
+    app: ignite
+spec:
+  ports:
+  - port: 11211
+    protocol: TCP
+    name: internal-http
+  - port: 47100
+    protocol: TCP
+    name: communication
+  - port: 47500
+    protocol: TCP
+    name: discovery
+  - port: 49112
+    protocol: TCP
+    name: jmx
+  selector:
+    app: kafka
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: ignite
+  labels:
+    app: ignite
+spec:
+  replicas: 3
+  template:
+    metadata:
+      name: ignite
+      labels:
+        app: ignite
+      annotations:
+        scheduler.alpha.kubernetes.io/affinity: >
+          {
+            "podAntiAffinity": {
+              "requiredDuringSchedulingIgnoredDuringExecution": [
+                {
+                  "labelSelector": {
+                    "matchExpressions": [
+                      {
+                        "key": "app",
+                        "operator": "In",
+                        "values": ["ignite"]
+                      }
+                    ]
+                  },
+                  "namespaces": ["default"],
+                  "topologyKey": "kubernetes.io/hostname"
+                }
+              ]
+            }
+          }
+    spec:
+      containers:
+        - name: ignite
+          image: <image>
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 11211
+            - containerPort: 47100
+            - containerPort: 47500
+            - containerPort: 49112
+          readinessProbe:
+            exec:
+              command:
+              - ls
+              - /opt/ignite/stats/
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          env:
+            - name: IGNITE_VERSION
+              value: "2.3.0"
+            - name: IGNITE_HOME
+              value: "/opt/ignite/apache-ignite-fabric-2.3.0-bin"
+            - name: JVM_OPTS
+              value: "-Xmx2g -Xms2g -XX:MaxDirectMemorySize=1g -Dcom.sun.management.jmxremote -DIGNITE_QUIET=false -XX:+ExitOnOutOfMemoryError"
+          resources:
+            limits:
+              cpu: "150m"
+              memory: "4Gi"
+      imagePullSecrets:
+      - name: gcloudregistry
